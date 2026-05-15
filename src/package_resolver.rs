@@ -502,7 +502,9 @@ fn populate_packages(source: Source, stack: &mut Vec<PackageSpec>, done: &HashSe
         if let Some(import) = node.cast::<ModuleImport>() {
             dbg!(import);
             for candidate in node.children() {
-                if let Some(str_candidate) = candidate.cast::<Str>() && str_candidate.get().starts_with("@") {
+                if let Some(str_candidate) = candidate.cast::<Str>()
+                    && str_candidate.get().starts_with("@")
+                {
                     dbg!(str_candidate);
                     import_nodes.push(str_candidate);
                 }
@@ -522,7 +524,7 @@ fn populate_packages(source: Source, stack: &mut Vec<PackageSpec>, done: &HashSe
 }
 
 /// Pre-populate the cache with package dependencies in an async context for a given set of sources.
-/// This doesn't pull in regular imports from 
+/// This doesn't pull in regular imports from
 async fn async_prepopulate_dependencies<C: PackageResolverCache>(
     cache: &mut C,
     sources: impl IntoIterator<Item = Source>,
@@ -556,17 +558,14 @@ async fn async_prepopulate_dependencies<C: PackageResolverCache>(
             .map_err(|error| PackageError::MalformedArchive(Some(eco_format!("{error}"))))?;
         let mut archive = Archive::new(&archive_bytes[..]);
         let entries = archive.entries().unwrap();
-        for path in entries
-            .filter_map(|entry| entry.ok()?.path().ok().map(|data| data.to_path_buf()))
+        for path in
+            entries.filter_map(|entry| entry.ok()?.path().ok().map(|data| data.to_path_buf()))
         {
             let file_id = FileId::new(Some(spec.clone()), VirtualPath::new(path));
             if files_done.contains(&file_id) {
                 continue;
             }
-            let Ok(Some(source)) = cache.lookup_cached::<Source>(
-                &spec,
-                file_id,
-            ) else {
+            let Ok(Some(source)) = cache.lookup_cached::<Source>(&spec, file_id) else {
                 continue;
             };
             populate_packages(source, &mut package_stack, &packages_done);
@@ -583,12 +582,18 @@ mod test_async_packages {
     use std::iter;
     use tokio;
 
-use typst::syntax::{FileId, Source, VirtualPath, parse};
+    use typst::syntax::{FileId, Source, VirtualPath, parse};
 
-use crate::{cached_file_resolver::CachedFileResolver, file_resolver::FileResolver, package_resolver::{PackageResolver, PackageResolverCache, async_prepopulate_dependencies, populate_packages}};
+    use crate::{
+        cached_file_resolver::CachedFileResolver,
+        file_resolver::FileResolver,
+        package_resolver::{
+            PackageResolver, PackageResolverCache, async_prepopulate_dependencies,
+            populate_packages,
+        },
+    };
 
-    const LOTS_OF_IMPORTS: &str =
-r#"
+    const LOTS_OF_IMPORTS: &str = r#"
 #import "@preview/cetz:0.5.2"
 #import     "@preview/fletcher:0.5.8"
 #import "@preview/timeliney:0.4.0"
@@ -596,7 +601,10 @@ r#"
 "#;
     #[tokio::test]
     async fn fetch_packages() {
-        let source = Source::new(FileId::new(None, VirtualPath::new("/testing.typ")), LOTS_OF_IMPORTS.to_owned());
+        let source = Source::new(
+            FileId::new(None, VirtualPath::new("/testing.typ")),
+            LOTS_OF_IMPORTS.to_owned(),
+        );
         let mut cache = PackageResolver::builder().with_in_memory_cache();
         let x = async_prepopulate_dependencies(&mut cache.cache, iter::once(source)).await;
         assert!(x.is_ok());
