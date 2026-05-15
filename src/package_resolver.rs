@@ -496,11 +496,11 @@ impl IntoCachedFileResolver for PackageResolver<FileSystemCache> {
     }
 }
 
-fn populate_packages(root: SyntaxNode, stack: &mut Vec<PackageSpec>, done: &HashSet<PackageSpec>) {
+fn find_and_queue_packages(root: SyntaxNode, stack: &mut Vec<PackageSpec>, done: &HashSet<PackageSpec>) {
     let mut ast_stack: Vec<_> = vec![&root];
     let mut import_nodes = vec![];
     while let Some(node) = ast_stack.pop() {
-        if let Some(import) = node.cast::<ModuleImport>() {
+        if let Some(_) = node.cast::<ModuleImport>() {
             for candidate in node.children() {
                 if let Some(str_candidate) = candidate.cast::<Str>()
                     && str_candidate.get().starts_with("@")
@@ -535,7 +535,7 @@ async fn async_prepopulate_dependencies<C: PackageResolverCache>(
     let mut package_stack: Vec<PackageSpec> = vec![];
     let client = reqwest::ClientBuilder::new().build().unwrap();
     for source in sources {
-        populate_packages(source.root().clone(), &mut package_stack, &packages_done);
+        find_and_queue_packages(source.root().clone(), &mut package_stack, &packages_done);
     }
     while let Some(spec) = package_stack.pop() {
         if packages_done.contains(&spec) {
@@ -570,7 +570,7 @@ async fn async_prepopulate_dependencies<C: PackageResolverCache>(
                 continue;
             }
             let source = parse(&content);
-            populate_packages(source, &mut package_stack, &packages_done);
+            find_and_queue_packages(source, &mut package_stack, &packages_done);
             files_done.insert(file_id);
         }
         let Ok(_) = cache.cache_archive(Archive::new(&archive_bytes[..]), &spec) else {
