@@ -15,9 +15,10 @@ use typst::{
     diag::{FileError, FileResult, PackageError},
     foundations::Bytes,
     syntax::{
-        FileId, Source, VirtualPath,
+        FileId, Source, SyntaxNode, VirtualPath,
         ast::{ModuleImport, Str},
         package::{PackageSpec, PackageVersion},
+        parse,
     },
 };
 
@@ -495,17 +496,15 @@ impl IntoCachedFileResolver for PackageResolver<FileSystemCache> {
     }
 }
 
-fn populate_packages(source: Source, stack: &mut Vec<PackageSpec>, done: &HashSet<PackageSpec>) {
-    let mut ast_stack: Vec<_> = source.root().children().collect();
+fn populate_packages(root: SyntaxNode, stack: &mut Vec<PackageSpec>, done: &HashSet<PackageSpec>) {
+    let mut ast_stack: Vec<_> = vec![&root];
     let mut import_nodes = vec![];
     while let Some(node) = ast_stack.pop() {
         if let Some(import) = node.cast::<ModuleImport>() {
-            dbg!(import);
             for candidate in node.children() {
                 if let Some(str_candidate) = candidate.cast::<Str>()
                     && str_candidate.get().starts_with("@")
                 {
-                    dbg!(str_candidate);
                     import_nodes.push(str_candidate);
                 }
             }
@@ -514,7 +513,6 @@ fn populate_packages(source: Source, stack: &mut Vec<PackageSpec>, done: &HashSe
         }
     }
     for import_name in import_nodes.into_iter().map(|import| import.get()) {
-        dbg!(&import_name);
         let spec = PackageSpec::from_str(&import_name.as_str()).unwrap();
         if done.contains(&spec) || stack.contains(&spec) {
             continue;
@@ -523,8 +521,10 @@ fn populate_packages(source: Source, stack: &mut Vec<PackageSpec>, done: &HashSe
     }
 }
 
-/// Pre-populate the cache with package dependencies in an async context for a given set of sources.
-/// This doesn't pull in regular imports from
+/// Pre-populate the cache with package dependencies in an async context for a
+/// given set of sources.
+/// This doesn't pull in regular imports from the sources passed to it, so make
+/// sure to pass all source files from a given template.
 async fn async_prepopulate_dependencies<C: PackageResolverCache>(
     cache: &mut C,
     sources: impl IntoIterator<Item = Source>,
@@ -535,7 +535,7 @@ async fn async_prepopulate_dependencies<C: PackageResolverCache>(
     let mut package_stack: Vec<PackageSpec> = vec![];
     let client = reqwest::ClientBuilder::new().build().unwrap();
     for source in sources {
-        populate_packages(source, &mut package_stack, &packages_done);
+        populate_packages(source.root().clone(), &mut package_stack, &packages_done);
     }
     while let Some(spec) = package_stack.pop() {
         if packages_done.contains(&spec) {
@@ -558,22 +558,28 @@ async fn async_prepopulate_dependencies<C: PackageResolverCache>(
             .map_err(|error| PackageError::MalformedArchive(Some(eco_format!("{error}"))))?;
         let mut archive = Archive::new(&archive_bytes[..]);
         let entries = archive.entries().unwrap();
-        for path in
-            entries.filter_map(|entry| entry.ok()?.path().ok().map(|data| data.to_path_buf()))
-        {
+        for (path, content) in entries.filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path().ok().map(|data| data.to_path_buf())?;
+            let bytes: Vec<_> = entry.bytes().filter_map(|data| data.ok()).collect();
+            let content = String::from_utf8(bytes).ok()?;
+            Some((path, content))
+        }) {
             let file_id = FileId::new(Some(spec.clone()), VirtualPath::new(path));
             if files_done.contains(&file_id) {
                 continue;
             }
-            let Ok(Some(source)) = cache.lookup_cached::<Source>(&spec, file_id) else {
-                continue;
-            };
+            let source = parse(&content);
             populate_packages(source, &mut package_stack, &packages_done);
             files_done.insert(file_id);
         }
-        dbg!(cache.cache_archive(Archive::new(&archive_bytes[..]), &spec));
+        let Ok(_) = cache.cache_archive(Archive::new(&archive_bytes[..]), &spec) else {
+            packages_failed.insert(spec);
+            continue;
+        };
         packages_done.insert(spec);
     }
+    debug_assert!(packages_failed.len() == 0);
     Ok(packages_done)
 }
 
@@ -582,22 +588,16 @@ mod test_async_packages {
     use std::iter;
     use tokio;
 
-    use typst::syntax::{FileId, Source, VirtualPath, parse};
+    use typst::syntax::{FileId, Source, VirtualPath};
 
-    use crate::{
-        cached_file_resolver::CachedFileResolver,
-        file_resolver::FileResolver,
-        package_resolver::{
-            PackageResolver, PackageResolverCache, async_prepopulate_dependencies,
-            populate_packages,
-        },
-    };
+    use crate::package_resolver::{PackageResolver, async_prepopulate_dependencies};
 
     const LOTS_OF_IMPORTS: &str = r#"
 #import "@preview/cetz:0.5.2"
-#import     "@preview/fletcher:0.5.8"
+#import "@preview/fletcher:0.5.8"
 #import "@preview/timeliney:0.4.0"
 #import "@preview/pinit:0.2.2"
+#import "@preview/deckz:0.3.1"
 "#;
     #[tokio::test]
     async fn fetch_packages() {
