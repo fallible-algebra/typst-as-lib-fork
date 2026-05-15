@@ -507,7 +507,7 @@ fn find_and_queue_packages(
         if let Some(_) = node.cast::<ModuleImport>() {
             for candidate in node.children() {
                 if let Some(str_candidate) = candidate.cast::<Str>()
-                    && str_candidate.get().starts_with("@")
+                    && str_candidate.get().starts_with("@preview")
                 {
                     import_nodes.push(str_candidate);
                 }
