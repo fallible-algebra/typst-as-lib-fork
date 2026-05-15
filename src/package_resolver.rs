@@ -496,7 +496,11 @@ impl IntoCachedFileResolver for PackageResolver<FileSystemCache> {
     }
 }
 
-fn find_and_queue_packages(root: SyntaxNode, stack: &mut Vec<PackageSpec>, done: &HashSet<PackageSpec>) {
+fn find_and_queue_packages(
+    root: SyntaxNode,
+    stack: &mut Vec<PackageSpec>,
+    done: &HashSet<PackageSpec>,
+) {
     let mut ast_stack: Vec<_> = vec![&root];
     let mut import_nodes = vec![];
     while let Some(node) = ast_stack.pop() {
