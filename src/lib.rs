@@ -276,7 +276,10 @@ impl TypstEngine<TypstTemplateCollection> {
     /// let doc = typst::compile(&world).output.expect("Failed");
     /// comemo::evict(30); // caller manages cache eviction
     /// ```
-    pub fn world_builder<I>(&self, main_source_id: I) -> TypstWorldBuilder<'_, TypstTemplateCollection>
+    pub fn world_builder<I>(
+        &self,
+        main_source_id: I,
+    ) -> TypstWorldBuilder<'_, TypstTemplateCollection>
     where
         I: IntoFileId,
     {
@@ -302,11 +305,7 @@ impl TypstEngine<TypstTemplateCollection> {
     /// // With inputs:
     /// let pdf_bytes = engine.with_world("/main.typ", |world| { ... }).unwrap();
     /// ```
-    pub fn with_world<F, I, R>(
-        &self,
-        main_source_id: I,
-        f: F,
-    ) -> Result<R, TypstAsLibError>
+    pub fn with_world<F, I, R>(&self, main_source_id: I, f: F) -> Result<R, TypstAsLibError>
     where
         I: IntoFileId,
         F: FnOnce(&TypstWorld<'_>) -> R,
