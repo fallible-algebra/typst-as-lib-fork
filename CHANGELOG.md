@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.15.5] - 2026-05-29
+
+- Made `TypstWorld` public, enabling direct access to the Typst world.
+- Added `world_builder` method to `TypstEngine<TypstTemplateCollection>` and `TypstEngine<TypstTemplateMainFile>`.
+  Returns a public `TypstWorldBuilder` — call `.with_inputs(dict)` optionally, then `.build()`.
+  The caller is responsible for driving compilation and managing `comemo` cache eviction.
+- Added `with_world` method to both engine variants.
+  Accepts a closure `FnOnce(&TypstWorld) -> R`, runs `comemo` eviction after the closure, and returns `Result<R, TypstAsLibError>`.
+  Recommended for scoped low-level access without manual cache management.
+- `TypstWorld` and `TypstWorldBuilder` are now public types.
+- `comemo` cache eviction is now handled via `Drop` on `TypstWorld` instead of inside `do_compile`.
+  This ensures eviction also happens when using `build_world` or `with_world` directly.
+- Internal: extracted `TypstWorldBuilder` to centralize world construction.
+
 ## [0.14.4] - 2025-10-25
 
 - Update dependencies

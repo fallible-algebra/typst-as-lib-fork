@@ -113,34 +113,23 @@ impl<T> TypstEngine<T> {
     where
         Doc: Document,
     {
-        let library = if let Some(inputs) = inputs {
-            let lib = self.create_injected_library(inputs);
-            match lib {
-                Ok(lib) => Cow::Owned(lib),
-                Err(err) => {
-                    return Warned {
-                        output: Err(err),
-                        warnings: Default::default(),
-                    };
-                }
+        let mut builder = TypstWorldBuilder::new(self, main_source_id);
+        if let Some(inputs) = inputs {
+            builder = builder.with_inputs(inputs);
+        }
+        let world = match builder.build() {
+            Ok(world) => world,
+            Err(err) => {
+                return Warned {
+                    output: Err(err),
+                    warnings: Default::default(),
+                };
             }
-        } else {
-            Cow::Borrowed(&self.library)
-        };
-        let world = TypstWorld {
-            main_source_id,
-            library,
-            now: Utc::now(),
-            file_resolvers: &self.file_resolvers,
-            book: &self.book,
-            fonts: &self.fonts,
         };
         let Warned { output, warnings } = typst::compile(&world);
-
-        if let Some(comemo_evict_max_age) = self.comemo_evict_max_age {
-            comemo::evict(comemo_evict_max_age);
+        if let Some(max_age) = self.comemo_evict_max_age {
+            comemo::evict(max_age);
         }
-
         Warned {
             output: output.map_err(Into::into),
             warnings,
@@ -268,6 +257,67 @@ impl TypstEngine<TypstTemplateCollection> {
     {
         self.do_compile(main_source_id.into_file_id(), None)
     }
+
+    /// Returns a [`TypstWorldBuilder`] for constructing a [`TypstWorld`] bound to a specific file.
+    ///
+    /// This is an advanced low-level API. The caller is responsible for driving compilation
+    /// (e.g. via `typst::compile`) and for managing the `comemo` cache afterwards.
+    /// No cache eviction is performed automatically — use [`with_world`](Self::with_world)
+    /// if you want eviction handled for you.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// # use typst_as_lib::TypstEngine;
+    /// let engine = TypstEngine::builder().build();
+    ///
+    /// let world = engine.world_builder("/main.typ")
+    ///     .with_inputs(my_inputs)
+    ///     .build()?;
+    /// let doc = typst::compile(&world).output.expect("Failed");
+    /// comemo::evict(30); // caller manages cache eviction
+    /// ```
+    pub fn world_builder<I>(&self, main_source_id: I) -> TypstWorldBuilder<'_, TypstTemplateCollection>
+    where
+        I: IntoFileId,
+    {
+        TypstWorldBuilder::new(self, main_source_id.into_file_id())
+    }
+
+    /// Execute a closure with a [`TypstWorld`] for a specific file,
+    /// optionally injecting custom inputs.
+    ///
+    /// Runs the `comemo` cache eviction after the closure returns.
+    /// For full control use [`world_builder`](Self::world_builder) instead.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// # use typst_as_lib::TypstEngine;
+    /// let engine = TypstEngine::builder().build();
+    ///
+    /// let pdf_bytes = engine.with_world("/main.typ", |world| {
+    ///     let doc = typst::compile(world).output.expect("Failed");
+    ///     typst_pdf::pdf(&doc, Default::default()).expect("Failed")
+    /// }).unwrap();
+    ///
+    /// // With inputs:
+    /// let pdf_bytes = engine.with_world("/main.typ", |world| { ... }).unwrap();
+    /// ```
+    pub fn with_world<F, I, R>(
+        &self,
+        main_source_id: I,
+        f: F,
+    ) -> Result<R, TypstAsLibError>
+    where
+        I: IntoFileId,
+        F: FnOnce(&TypstWorld<'_>) -> R,
+    {
+        let world = self.world_builder(main_source_id).build()?;
+        let result = f(&world);
+        if let Some(max_age) = self.comemo_evict_max_age {
+            comemo::evict(max_age);
+        }
+        Ok(result)
+    }
 }
 
 impl TypstEngine<TypstTemplateMainFile> {
@@ -316,6 +366,57 @@ impl TypstEngine<TypstTemplateMainFile> {
     {
         let TypstTemplateMainFile { source_id } = self.template;
         self.do_compile(source_id, None)
+    }
+
+    /// Returns a [`TypstWorldBuilder`] using the engine's pre-configured main file.
+    ///
+    /// This is an advanced low-level API. The caller is responsible for driving compilation
+    /// (e.g. via `typst::compile`) and for managing the `comemo` cache afterwards.
+    /// No cache eviction is performed automatically — use [`with_world`](Self::with_world)
+    /// if you want eviction handled for you.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// # use typst_as_lib::TypstEngine;
+    /// let engine = TypstEngine::builder().main_file("= Hello").build();
+    ///
+    /// let world = engine.world_builder()
+    ///     .with_inputs(my_inputs)
+    ///     .build()?;
+    /// let doc = typst::compile(&world).output.expect("Failed");
+    /// comemo::evict(30); // caller manages cache eviction
+    /// ```
+    pub fn world_builder(&self) -> TypstWorldBuilder<'_, TypstTemplateMainFile> {
+        let TypstTemplateMainFile { source_id } = self.template;
+        TypstWorldBuilder::new(self, source_id)
+    }
+
+    /// Execute a closure with a [`TypstWorld`] using the engine's pre-configured main file,
+    /// optionally injecting custom inputs.
+    ///
+    /// Runs the `comemo` cache eviction after the closure returns.
+    /// For full control use [`world_builder`](Self::world_builder) instead.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// # use typst_as_lib::TypstEngine;
+    /// let engine = TypstEngine::builder().main_file("= Hello").build();
+    ///
+    /// let pdf_bytes = engine.with_world(|world| {
+    ///     let doc = typst::compile(world).output.expect("Failed");
+    ///     typst_pdf::pdf(&doc, Default::default()).expect("Failed")
+    /// }).unwrap();
+    /// ```
+    pub fn with_world<F, R>(&self, f: F) -> Result<R, TypstAsLibError>
+    where
+        F: FnOnce(&TypstWorld<'_>) -> R,
+    {
+        let world = self.world_builder().build()?;
+        let result = f(&world);
+        if let Some(max_age) = self.comemo_evict_max_age {
+            comemo::evict(max_age);
+        }
+        Ok(result)
     }
 }
 
@@ -671,7 +772,11 @@ impl<T> TypstTemplateEngineBuilder<T> {
     }
 }
 
-struct TypstWorld<'a> {
+/// The Typst world instance used for compilation.
+///
+/// Borrows its configuration from a [`TypstEngine`]. Constructed via
+/// [`TypstEngine::world_builder`] or [`TypstEngine::with_world`].
+pub struct TypstWorld<'a> {
     library: Cow<'a, LazyHash<Library>>,
     main_source_id: FileId,
     now: DateTime<Utc>,
@@ -731,6 +836,50 @@ impl typst::World for TypstWorld<'_> {
         let month = (date.month0() + 1) as u8;
         let day = (date.day0() + 1) as u8;
         Datetime::from_ymd(year, month, day)
+    }
+}
+
+/// Builder for constructing a [`TypstWorld`] from a [`TypstEngine`].
+///
+/// Obtained via [`TypstEngine::world_builder`]. Call [`with_inputs`](Self::with_inputs)
+/// optionally, then [`build`](Self::build) to get the world.
+pub struct TypstWorldBuilder<'a, T> {
+    engine: &'a TypstEngine<T>,
+    main_source_id: FileId,
+    inputs: Option<Dict>,
+}
+
+impl<'a, T> TypstWorldBuilder<'a, T> {
+    fn new(engine: &'a TypstEngine<T>, main_source_id: FileId) -> Self {
+        Self {
+            engine,
+            main_source_id,
+            inputs: None,
+        }
+    }
+
+    /// Injects a `Dict` as `sys.inputs` into the compiled document.
+    pub fn with_inputs<D: Into<Dict>>(mut self, inputs: D) -> Self {
+        self.inputs = Some(inputs.into());
+        self
+    }
+
+    /// Builds the [`TypstWorld`]. Returns an error if input injection fails.
+    pub fn build(self) -> Result<TypstWorld<'a>, TypstAsLibError> {
+        let library = if let Some(inputs) = self.inputs {
+            Cow::Owned(self.engine.create_injected_library(inputs)?)
+        } else {
+            Cow::Borrowed(&self.engine.library)
+        };
+
+        Ok(TypstWorld {
+            main_source_id: self.main_source_id,
+            library,
+            now: Utc::now(),
+            file_resolvers: &self.engine.file_resolvers,
+            book: &self.engine.book,
+            fonts: &self.engine.fonts,
+        })
     }
 }
 

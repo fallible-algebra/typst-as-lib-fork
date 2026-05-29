@@ -192,6 +192,53 @@ The `TypstEngine::main_file` call is not needed, it's just for convenience. You 
 
 [See example](https://github.com/Relacibo/typst-as-lib/blob/main/examples/html.rs)
 
+## Low-level world access
+
+For advanced use-cases (e.g. custom rendering pipelines or document inspection), you can get direct access to the underlying [`TypstWorld`] without going through the standard `compile` methods.
+
+### `with_world` (recommended)
+
+The closure-based API handles `comemo` cache eviction automatically after the closure returns.
+
+```rust
+// TypstEngine<TypstTemplateMainFile>
+let pdf_bytes = engine
+    .with_world(|world| {
+        let doc = typst::compile(world).output.expect("compile failed");
+        typst_pdf::pdf(&doc, Default::default()).expect("pdf failed")
+    })
+    .unwrap();
+
+// TypstEngine<TypstTemplateCollection>
+let pdf_bytes = engine
+    .with_world("/main.typ", |world| {
+        let doc = typst::compile(world).output.expect("compile failed");
+        typst_pdf::pdf(&doc, Default::default()).expect("pdf failed")
+    })
+    .unwrap();
+```
+
+### `world_builder` (full control)
+
+If you need to inject inputs or hold the world across multiple operations, use `world_builder`. You are responsible for cache eviction.
+
+```rust
+// TypstEngine<TypstTemplateMainFile>
+let world = engine.world_builder()
+    .with_inputs(my_inputs)
+    .build()
+    .unwrap();
+
+// TypstEngine<TypstTemplateCollection>
+let world = engine.world_builder("/main.typ")
+    .with_inputs(my_inputs)
+    .build()
+    .unwrap();
+
+let doc = typst::compile(&world).output.expect("compile failed");
+comemo::evict(30); // manage eviction yourself
+```
+
 ## TODO
 - Maybe `packages` WASM support, if possible... 
 - Make "static `Source`s/binary files" added with `TypstEngineBuilder::with_static_[file/source_file]_resolver` and main file editable inbetween `compile` calls. Maybe add "shared file resolver".
@@ -200,7 +247,7 @@ The `TypstEngine::main_file` call is not needed, it's just for convenience. You 
 
 ## Notice
 
-**Documentation only**: The in-code documentation (doc comments) was generated with assistance from AI (GitHub Copilot). The actual implementation code is handwritten.
+**AI usage**: In rare cases, AI assistance was used during development. Any AI-generated or AI-assisted code was manually reviewed and, where necessary, corrected before inclusion. Documentation and code comments may also be written with AI assistance.
 
 ## Previous work
 
